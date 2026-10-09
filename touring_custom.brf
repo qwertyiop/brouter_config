@@ -1,0 +1,167 @@
+# --- Global Configuration ---
+assign assign_initial_cost_mode = 1
+assign validForBicycles         = 1
+
+# --- Global Variables ---
+global turnInstructionMode = 7  # Настройка чистых подсказок навигатора
+global considerTurnRestrictions = 1 # Учет системных ограничений поворотов из OSM
+global use_dynamic_range = true
+
+# --- Context: Profile Variables ---
+---context:global
+
+# Включаем жесткую ориентацию на кратчайший путь по расстоянию
+assign distancecostfactor = 1.0
+
+# Дефолтный костфактор
+assign defaultcostfactor = 1.1
+
+
+# --- Context: Way Parsing Logic ---
+---context:way
+
+# 1. Логика одностороннего движения
+assign is_oneway_except_bicycle = if oneway:bicycle=no then 1 else 0
+
+assign is_bad_oneway =
+  if reversedirection=yes then
+    ( if oneway=yes|1 then 1 else 0 )
+  else
+    ( if oneway=-1 then 1 else 0 )
+
+# Движение строго против потока (запрещено)
+assign is_forbidden_oneway = and is_bad_oneway ( not is_oneway_except_bicycle )
+
+
+# 2. Логика движения по полосе (попутное направление)
+assign is_motorway_road = if highway=trunk|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified then 1 else 0
+
+# Запрещаем левое смещение (если мы едем против шерсти на односторонней автодороге)
+assign is_illegal_left_alignment = and is_motorway_road is_bad_oneway
+
+
+# 3. Логика лестниц с пандусами (Исключение из запретов)
+assign is_steps = highway=steps
+assign has_bicycle_ramp = if ramp:bicycle=yes then 1 else if ramp:stroller=yes then 1 else 0
+assign is_steps_access_denied = if bicycle=no|private then 1 else if access=no|private then 1 else 0
+
+# Лестница запрещена, если на ней НЕТ пандуса ИЛИ если доступ на неё явно закрыт знаками
+assign is_forbidden_steps = and is_steps ( or ( not has_bicycle_ramp ) is_steps_access_denied )
+
+
+# 4. Полные запреты движения и учет ограничений доступа OSM
+assign access_forbidden =
+  if highway=motorway|motorway_link then 1
+  else if is_forbidden_steps then 1                   # ЗАПРЕТ ЛЕСТНИЦ БЕЗ ПАНДУСА
+  else if railway=tram|rail|abandoned then 1           # ПОЛНЫЙ ЗАПРЕТ ВЫДЕЛЕННЫХ ТРАМВАЙНЫХ И Ж/Д ПУТЕЙ
+  else if smoothness=impassable then 1                # ПОЛНЫЙ ЗАПРЕТ НЕПРОХОДИМЫХ ДОРОГ
+  else if bicycle=no|private|use_sidepath then 1       # Ограничение велосипедного доступа
+  else if access=no|private then 1                     # Общее ограничение доступа к дороге
+  else if is_forbidden_oneway then 1                  # Жесткий запрет на встречку
+  else if is_illegal_left_alignment then 1             # Запрет левого смещения на полосе
+  else 0
+
+
+# 5. Определение велосипедной инфраструктуры (Высший приоритет)
+assign is_cycleway = highway=cycleway
+assign is_cycle_street = cyclestreet=yes
+assign is_bike_route = route=bicycle
+
+assign has_lane_left  = or cycleway:left=lane|track  cycleway:left=share_busway
+assign has_lane_right = or cycleway:right=lane|track cycleway:right=share_busway
+assign has_lane_both  = or cycleway=lane|track       cycleway=share_busway
+assign has_cycle_lane = or has_lane_both ( or has_lane_left has_lane_right )
+
+# Легальные тротуары и дорожки (footway/path/pedestrian с bicycle=yes или designated)
+assign is_legal_bike_pedestrian = and highway=footway|pedestrian|path|living_street bicycle=yes|designated
+
+# Множественный логический OR для высшего приоритета
+assign is_highest_priority = 
+  or is_cycleway 
+  ( or has_cycle_lane 
+    ( or is_cycle_street 
+      ( or is_legal_bike_pedestrian is_bike_route ) 
+    ) 
+  )
+
+
+# 6. Логика официальных пешеходных переходов
+assign is_legal_crossing = if footway=crossing then 1 else if cycleway=crossing then 1 else 0
+
+
+# 7. Определение ОБЫЧНЫХ пешеходных зон (тротуары БЕЗ знака "велодорожка")
+assign is_lowest_priority = and highway=footway|pedestrian|path|living_street ( not is_legal_bike_pedestrian )
+
+
+# 8. Расчет стоимости пути (costfactor)
+assign costfactor =
+  if access_forbidden then 9999.0                   # Смягчено до 9999.0, чтобы точки старта/финиша не ломали граф
+  else if is_highest_priority then 1.0  
+  else if is_legal_crossing then 1.0
+  else if is_motorway_road then 1.02
+  else if highway=residential|service then 1.02
+  else if is_steps then 3.0                         # Разрешенные лестницы с пандусом
+  else if is_lowest_priority then 1.1   
+  else defaultcostfactor
+
+
+# 9. СОХРАНЕНО: Логика безопасных маневров
+# Накладываем штраф 400 метров для автодорог общего пользования при маневрах
+assign turncost = if is_motorway_road then 400 else 0
+
+
+# 10. Штрафы к скорости при движении по тротуарам и велодорожкам (Только для ETA!)
+assign maxspeed_cyclist =
+  if is_highest_priority then 14.0       
+  else if is_steps then 4.0              
+  else if is_lowest_priority then 9.0    
+  else 22.0                              
+
+
+# Классификатор приоритетов для вывода в интерфейс карт
+assign priorityclassifier =
+  if is_highest_priority then 3
+  else if highway=residential|service then 2
+  else 1
+
+
+# Настройка классификатора типов дорог
+assign initialclassifier =
+  if is_highest_priority then 10
+  else if is_motorway_road then 20
+  else if highway=residential|service then 30
+  else if highway=track then 40
+  else 50
+
+# Переменная initialcost выписывает штраф в метрах
+assign initialcost = if equal initialclassifier 40 then 2000 else 0
+
+# --- Context: Node Parsing Logic ---
+---context:node
+
+# Проверяем точечные запреты проезда (crossing=no)
+assign is_forbidden_crossing = crossing=no
+
+# 1. Объекты, требующие обязательного голосового предупреждения
+assign is_warning_node =
+  if highway=traffic_signals then 1              # Светофор
+  else if highway=crossing then 1                # Пешеходный переход
+  else if railway=level_crossing then 1          # Ж/Д переезд
+  else if barrier=gate|turnstile then 1          # Шлагбаум, ворота, турникет
+  else if traffic_calming=bump|hump|cushion then 1 # Лежачий полицейский / ИНД
+  else 0
+
+# 2. Глухие препятствия (полный запрет, если нет вело-доступа)
+assign is_blocked_barrier =
+  if barrier=wall|fence then
+    ( if bicycle=yes then 0 else 1 )
+  else 0
+
+# Расчет стоимости и триггер голосового предупреждения
+assign initialcost =
+  if is_forbidden_crossing then 9999
+  else if is_blocked_barrier then 9999
+  # Если это объект из списка предупреждений, даем микро-штраф 15 метров.
+  # Это заставит OsmAnd/Locus объявить голосом: "Впереди шлагбаум/светофор"
+  else if is_warning_node then 15
+  else 0
