@@ -42,7 +42,7 @@ assign is_illegal_left_alignment = and is_motorway_road is_bad_oneway
 
 # 3. Логика лестниц с пандусами (Исключение из запретов)
 assign is_steps = highway=steps
-assign has_bicycle_ramp = if ramp:bicycle=yes then 1 else if ramp:stroller=yes then 1 else 0
+assign has_bicycle_ramp = if ramp:bicycle=yes then 1 else 0
 assign is_steps_access_denied = if bicycle=no|private then 1 else if access=no|private then 1 else 0
 
 # Лестница запрещена, если на ней НЕТ пандуса ИЛИ если доступ на неё явно закрыт знаками
@@ -76,12 +76,12 @@ assign has_cycle_lane = or has_lane_both ( or has_lane_left has_lane_right )
 assign is_legal_bike_pedestrian = and highway=footway|pedestrian|path|living_street bicycle=yes|designated
 
 # Множественный логический OR для высшего приоритета
-assign is_highest_priority = 
-  or is_cycleway 
-  ( or has_cycle_lane 
-    ( or is_cycle_street 
-      ( or is_legal_bike_pedestrian is_bike_route ) 
-    ) 
+assign is_highest_priority =
+  or is_cycleway
+  ( or has_cycle_lane
+    ( or is_cycle_street
+      ( or is_legal_bike_pedestrian is_bike_route )
+    )
   )
 
 
@@ -96,12 +96,12 @@ assign is_lowest_priority = and highway=footway|pedestrian|path|living_street ( 
 # 8. Расчет стоимости пути (costfactor)
 assign costfactor =
   if access_forbidden then 9999.0                   # Смягчено до 9999.0, чтобы точки старта/финиша не ломали граф
-  else if is_highest_priority then 1.0  
+  else if is_highest_priority then 1.0
   else if is_legal_crossing then 1.0
   else if is_motorway_road then 1.02
   else if highway=residential|service then 1.02
   else if is_steps then 3.0                         # Разрешенные лестницы с пандусом
-  else if is_lowest_priority then 1.1   
+  else if is_lowest_priority then 1.1
   else defaultcostfactor
 
 
@@ -112,10 +112,10 @@ assign turncost = if is_motorway_road then 400 else 0
 
 # 10. Штрафы к скорости при движении по тротуарам и велодорожкам (Только для ETA!)
 assign maxspeed_cyclist =
-  if is_highest_priority then 14.0       
-  else if is_steps then 4.0              
-  else if is_lowest_priority then 9.0    
-  else 22.0                              
+  if is_highest_priority then 14.0
+  else if is_steps then 4.0
+  else if is_lowest_priority then 9.0
+  else 22.0
 
 
 # Классификатор приоритетов для вывода в интерфейс карт
@@ -154,8 +154,10 @@ assign is_warning_node =
 # 2. Глухие препятствия (полный запрет, если нет вело-доступа)
 assign is_blocked_barrier =
   if barrier=wall|fence then
-    ( if bicycle=yes then 0 else 1 )
+    ( if bicycle=yes then 0
+      else 1 )
   else 0
+
 
 # Расчет стоимости и триггер голосового предупреждения
 assign initialcost =
